@@ -1,0 +1,70 @@
+# zotero-import-ignore
+#
+# Vad zotero-tools aldrig ska ta med, varken i diagnos eller import.
+# Reglerna liknar .gitignore. Tomma rader och rader som börjar med # hoppas
+# över. Sökvägarna räknas från arkivroten.
+#
+#   analyzer/            mapp med det namnet, var som helst i trädet
+#   *.docx               filändelse, var som helst
+#   egna-predikningar/   toppmapp (den finns bara där)
+#   studier/*.pdf        mönster med snedstreck räknas från arkivroten
+#   !viktig.pdf          undantag: tar tillbaka något en tidigare regel tog bort
+#
+# Sista regeln som träffar avgör, precis som i .gitignore.
+
+
+# --- Mappar ---------------------------------------------------------------
+
+# Analyzerns egna utdata (processed_files.json och RIS). Inget citerbart.
+analyzer/
+
+# Staging. Filerna länkas först när de sorterats in på permanent plats.
+# books-to-sort ligger inuti books-to-fix, så detta täcker båda.
+books-to-fix/
+
+# Lars egna predikningar ska inte till Zotero.
+egna-predikningar/
+karismatik-helande/mina-predikningar-och-foredrag/
+
+# Mappar som inte alla innehåller kandidater, men de
+# skrivs här för att också fungera som en anteckning för användaren
+out/
+Claude outputs/
+ths/
+alt/
+gbguniversitet/
+alpha/
+debatt/
+diverse-osorterat/
+faq/
+forsamlingsplantering/
+homosexualitet/
+individuals-specific/alexandersson-linda/
+konfirmationsmaterial/
+kreativt/
+ledarskap-forsamlingsutveckling/
+marketing/
+nattvard/
+new-wine/
+exempel-bad-stuff/
+
+# Temporärt blockerade mappar, kräver manuell kontroll
+skapelse-evolution-vetenskap/
+studier/kyrkohistoria\individuals-movements-groups
+exegetik/bibel2026/
+filosofi/
+karismatik-helande/5-step-moodel/
+
+# --- Filformat ------------------------------------------------------------
+
+# Bara PDF och EPUB är citerbara. Word och Markdown är arbetsmaterial.
+*.doc
+*.docx
+*.md
+*.lwp
+*.sdw
+*.odt
+*.ppt
+*.pptx
+*.xls
+*.xlsx
