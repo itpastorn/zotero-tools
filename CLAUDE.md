@@ -70,8 +70,10 @@ Det samtalsbaserade (söka, anteckna, tagga) ska en MCP-server sköta.
   länkade sökvägar är nu relativa (`attachments:karismatik-helande/…`).
   Zotero konverterade de befintliga absoluta länkarna automatiskt.
 - **0 trasiga länkar.** Inga länkar pekar in i `books-to-fix`.
-- Arkivet: 1 458 dokumentfiler (PDF/EPUB efter `zotero-import-ignore`), varav
-  1 293 saknar Zotero-bilaga.
+- Arkivet: 1 202 dokumentfiler (PDF/EPUB efter `zotero-import-ignore`), varav
+  1 047 saknar Zotero-bilaga. (Körning 2026-09-19 efter att fler mappar
+  analyserats och flera mappar blockerats temporärt i ignorefilen; tidigare
+  1 458/1 293.)
 - **Reparationen är i praktiken klar innan den börjat.** `zotero-repair.py`
   behövs först när `sort-books` flyttat filer igen. Importen är hela jobbet.
 
@@ -79,16 +81,19 @@ Det samtalsbaserade (söka, anteckna, tagga) ska en MCP-server sköta.
 
 | Steg | Antal |
 | --- | --- |
-| Citerbara poster i analyzerns loggar | 740 |
-| – varav filen hittas i arkivet nu | 692 |
-| – varav redan har Zotero-bilaga | 139 |
-| **Att importera** | **553** |
-| Uteslutna av `zotero-import-ignore` (fel format) | 47 |
-| Filen hittas inte alls | 1 |
+| Citerbara poster i analyzerns loggar | 718 |
+| – varav filen hittas i arkivet nu | 674 |
+| – varav redan har Zotero-bilaga | 132 |
+| **Att importera** | **542** |
+| Uteslutna av `zotero-import-ignore` (fel format) | 44 |
+| Filen hittas inte alls | 0 |
 
-Typfördelning bland de 740: 511 bok, 196 artikel, 26 uppsats, 7 studie.
+Typfördelning bland de 718: 510 bok, 175 artikel, 29 uppsats, 4 studie.
 
-De 47 uteslutna är citerbara enligt analyzern men har format som ignorefilen
+Loggar i blockerade mappar hoppas över helt, så siffrorna stiger igen när
+de temporärt blockerade mapparna (se ignorefilen) släpps efter kontroll.
+
+De 44 uteslutna är citerbara enligt analyzern men har format som ignorefilen
 stoppar (`.doc`, `.docx`, `.md`, …). Det är avsiktligt – de försvinner tyst
 och ska inte förväxlas med fel.
 
@@ -269,8 +274,8 @@ relativa och hela.
    en `linked_file` och att `PATCH` kan ändra dess `path`. Ta ny backup av
    Zoteros datakatalog först.
 3. Steg 5: `zotero-import.py` med `--dry-run`, en mapp i taget, upp till de
-   553 kandidaterna.
+   542 kandidaterna (fler när de blockerade mapparna släpps).
 
-Sidospår när tillfälle ges: kör analyzern på
-`studier/kyrkohistoria/individuals-movements-groups/jonathan-edwards/` så att
-den omdöpta Marsden-biografin får en analys igen.
+Sidospår när tillfälle ges: gå igenom de temporärt blockerade mapparna i
+`zotero-import-ignore` och ta bort raderna en i taget. Marsden-biografin har
+fått ny analys (0 filer saknas), men ligger just nu i en blockerad mapp.
