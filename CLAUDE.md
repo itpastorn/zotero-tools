@@ -31,6 +31,23 @@ Det samtalsbaserade (söka, anteckna, tagga) ska en MCP-server sköta.
 - Backup av Zoteros datakatalog är tagen 2026-09-19, före första
   skrivande körning. Ta ny backup före första skarpa importen. Zotero-synk
   är ingen backup: raderingar synkas också.
+- **Datakatalogen (`C:\Users\gunther\Zotero`) ligger lokalt och ska inte
+  flyttas till Dropbox, OneDrive eller Google Drive.** Frågan är utredd
+  2026-09-20 och svaret är nej. Zotero kör SQLite i WAL-läge:
+  `zotero.sqlite` och `zotero.sqlite-wal` måste stämma överens med varandra,
+  men molntjänster laddar upp filer var för sig och fångar då ett par som
+  aldrig funnits samtidigt på disk. Versionshistoriken ser komplett ut och
+  är obrukbar just den dag den behövs. Därtill: konfliktkopior som Zotero
+  aldrig läser, online-only-platshållare som blir saknade bilagor, och
+  ständig omsynk av `storage/` (1 764 filer, 1,7 GB).
+- Rätt väg till automatisk backup är i stället en **konsekvent
+  ögonblicksbild som läggs i Dropbox som en zipfil** – en fil, en historik,
+  återställs alltid som en helhet. `sqlite3.Connection.backup()` i
+  standardbiblioteket tar läslås och skriver en korrekt kopia även medan
+  Zotero kör, så jobbet kan schemaläggas utan att Zotero stängs. Det som
+  behöver säkras är litet: `zotero.sqlite` (6,1 MB) och `fulltext.sqlite`
+  (19,7 MB). `storage/` är statiskt numera (Lars länkar, lagrar inte) och
+  kopieras separat och sällan. Planerat som `zotero-backup.py`, sidospår.
 - Enbart standardbiblioteket (`urllib`, `json`, `pathlib`, `argparse`) så
   länge det räcker. Ingen `.venv` behövs då.
 - Svenska i kommentarer, docstrings och utdata. Engelska termer behålls när
@@ -59,6 +76,7 @@ Det samtalsbaserade (söka, anteckna, tagga) ska en MCP-server sköta.
 | `zotero-patch-test.py` | klart, steg 4b | Växlar testbilagans `path` mellan två filer med `PATCH`. Mönstret för `zotero-repair.py` |
 | `zotero-import.py` | planerad | JSON → Zotero via lokala API:et, med matchning mot befintliga poster |
 | `zotero-repair.py` | planerad | Hittar trasiga `linked_file`-sökvägar, letar filnamnet i arkivet, uppdaterar `path` (kan eventuellt slås ihop med import) |
+| `zotero-backup.py` | planerad, sidospår | Konsekvent ögonblicksbild av databasfilerna med `sqlite3.Connection.backup()` → zip i Dropbox. Se backupregeln under Arbetssätt |
 | `notes.txt` | – | Lars egna anteckningar |
 
 `zoterolib.py` är ett medvetet pedagogiskt steg: modulbegreppet (import,
@@ -182,6 +200,10 @@ och ska inte förväxlas med fel.
 - Bilaga: `linked_file` med relativ sökväg om Base Directory är satt.
 - Batchgräns i API:et: 50 objekt per POST.
 - Idempotent: en andra körning ska inte skapa något nytt.
+- **`--antal N`, default 10.** Importen körs i små satser, inte 542 på en
+  gång, så att varje sats hinner granskas i Zotero innan nästa. Är `N` större
+  än antalet återstående kandidater avbryts körningen tyst när den sista är
+  klar – det är så hela högen körs när den dagen kommer.
 
 ## Zoteros lokala API – vad som gäller (Zotero 10, dok. 2026-07-29)
 
