@@ -1,39 +1,88 @@
 """zotero-import.py – steg 5: skapa Zotero-poster ur analyzerns loggar.
 
-DEL 2 AV FLERA. Skriptet läser och matchar, men skriver ännu ingenting:
-det visar vad som skulle hända med varje kandidat.
+DEL 3 AV FLERA. Skriptet läser, matchar och bygger de JSON-poster som
+skulle skickas – men skriver fortfarande ingenting till Zotero.
 
 Tre utfall per kandidat:
-  NY POST     inget liknande finns – en post skulle skapas
-  TRÄFF       posten finns redan – bara filen skulle bifogas
+  NY POST     inget liknande finns – förälder + bilaga skulle skapas
+  TRÄFF       posten finns redan – bara bilagan skulle skapas
   TVETYDIGT   flera möjliga kopplingar – hoppas över, kräver handpåläggning
 
 Kör:  python zotero-import.py            (tio kandidater)
       python zotero-import.py --antal 3  (tre)
       python zotero-import.py --antal 9999  (alla som finns)
+      python zotero-import.py --json     (visa hela JSON-posten)
 """
 
 import argparse
+import json
 import re
 from collections import defaultdict
 from itertools import islice
 
-from zoterolib import attachment_names, fetch
+from zoterolib import attachment_names, fetch, item_type_fields
 from arkivlib import ARCHIVE, archive_files, citable_entries, read_ignore
 
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument(
-    "--antal",
-    type=int,
-    default=10,
-    help="hur många kandidater som behandlas (standard: 10)",
+# Samlingen skapas av Lars i Zotero, inte av skriptet. Saknas den avbryts
+# körningen – hellre det än att posterna hamnar på okänd plats.
+COLLECTION_NAME = "Automated-imports"
+
+# Taggen sitter på varje NY post. Metadatan är LLM-extraherad ur dokumentets
+# första 6 000 tecken och kan vara fel. Lars tar bort taggen efter granskning.
+REVIEW_TAG = "okontrollerad"
+
+# analyzerns typ → Zoteros itemType
+TYPE_MAP = {
+    "bok": "book",
+    "artikel": "journalArticle",
+    "uppsats": "thesis",
+    "studie": "report",
+}
+
+# Fält som alla fyra typerna delar: analyzerns namn → Zoteros namn.
+COMMON_FIELDS = {
+    "summary": "abstractNote",
+    "isbn": "ISBN",
+    "publisher_place": "place",
+}
+
+# Fält som bara gäller vissa typer. Sidantalet heter olika saker beroende på
+# om verket har egna sidor (numPages) eller sidor i något större (pages).
+TYPE_FIELDS = {
+    "book": {"publisher": "publisher", "edition": "edition", "pages_total": "numPages"},
+    "journalArticle": {"publication": "publicationTitle", "pages_total": "pages"},
+    "thesis": {
+        "institution": "university",
+        "thesis_type": "thesisType",
+        "institution_place": "place",
+        "pages_total": "numPages",
+    },
+    "report": {
+        "institution": "institution",
+        "institution_place": "place",
+        "pages_total": "pages",
+    },
+}
+
+# Ord som avslöjar att ett "Efternamn, Förnamn" i själva verket är en
+# organisation. Då ska namnet inte splittas i två fält.
+ORG_WORDS = (
+    "university", "church", "assemblies", "society", "institute", "press",
+    "department", "ministries", "council", "commission", "school", "seminary",
+    "college", "board", "conference", "association", "foundation",
 )
+
+CONTENT_TYPES = {".pdf": "application/pdf", ".epub": "application/epub+zip"}
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--antal", type=int, default=10,
+                    help="hur många kandidater som behandlas (standard: 10)")
+parser.add_argument("--json", action="store_true",
+                    help="visa hela JSON-posten som skulle skickas")
 args = parser.parse_args()
 
 
 # --- Normalisering --------------------------------------------------------
-# Jämförelser måste tåla skillnader i skiftläge, skiljetecken och mellanslag.
-# "God's Empowering Presence" och "Gods empowering presence" är samma titel.
 
 
 def norm(text):
@@ -53,33 +102,121 @@ def norm_isbn(text):
 
 def surname(author):
     """Första författarens efternamn ur "Efternamn, Förnamn; Efternamn, …"."""
-    first = (author or "").split(";")[0]
-    return norm(first.split(",")[0])
+    return norm((author or "").split(";")[0].split(",")[0])
 
 
 def zotero_surnames(item):
     """Efternamnen på en Zotero-posts författare. Enfältsnamn räknas som ett."""
-    names = set()
-    for creator in item.get("creators") or []:
-        names.add(norm(creator.get("lastName") or creator.get("name")))
+    names = {norm(c.get("lastName") or c.get("name"))
+             for c in item.get("creators") or []}
     return names - {""}
+
+
+# --- Zoteros eget schema --------------------------------------------------
+
+
+# Fältschemat kommer från Zotero men cachas på disk av zoterolib – anropet
+# tar omkring 20 sekunder per typ.
+SCHEMA = {t: item_type_fields(t) for t in TYPE_MAP.values()}
+
+
+# --- Bygg posterna --------------------------------------------------------
+
+# Namn som blivit enfältsnamn. Skrivs ut till sist så att Lars kan rätta de
+# som heuristiken tog fel på.
+single_field_names = []
+
+
+def creators(author, source):
+    """Författarsträngen → Zoteros creators-lista.
+
+    "Efternamn, Förnamn" blir två fält. Allt annat – ett enda namn, tre
+    kommatecken, eller något som innehåller ett organisationsord – blir ett
+    enfältsnamn, eftersom "Assemblies of God, General Presbytery" inte är
+    ett förnamn och ett efternamn.
+    """
+    result = []
+    for part in (author or "").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        looks_organisational = any(w in part.lower() for w in ORG_WORDS)
+        if part.count(",") == 1 and not looks_organisational:
+            last, first = (x.strip() for x in part.split(","))
+            if last and first:
+                result.append({"creatorType": "author",
+                               "firstName": first, "lastName": last})
+                continue
+        result.append({"creatorType": "author", "name": part})
+        single_field_names.append((part, source))
+    return result
+
+
+def build_parent(name, analysis, collection):
+    """JSON-posten för själva verket (föräldern till bilagan)."""
+    item_type = TYPE_MAP[analysis.get("type")]
+    item = {
+        "itemType": item_type,
+        "title": analysis.get("title") or name,
+        "creators": creators(analysis.get("author"), name),
+        "collections": [collection],
+        "tags": [{"tag": REVIEW_TAG}],
+    }
+
+    # date_full är mer exakt men finns bara på 18 %. year på 85 %. Saknas
+    # båda utelämnas fältet – Zotero klarar en post utan datum.
+    date = analysis.get("date_full") or analysis.get("year")
+    if date:
+        item["date"] = str(date)
+
+    mapping = {**COMMON_FIELDS, **TYPE_FIELDS[item_type]}
+    for ours, theirs in mapping.items():
+        value = analysis.get(ours)
+        if not value:
+            continue
+        if theirs not in SCHEMA[item_type]:
+            # Fältet passar inte den här typen. Att tappa det är rätt – ett
+            # ISBN på en tidskriftsartikel hör ingenstans hemma.
+            continue
+        item[theirs] = str(value)
+    return item
+
+
+def build_attachment(name, parent_key):
+    """JSON-posten för den länkade bilagan.
+
+    Sökvägen är relativ mot Linked Attachment Base Directory (arkivroten)
+    och skrivs med snedstreck framåt, precis som Zotero sparar den.
+    """
+    relative = archive[name].relative_to(ARCHIVE).as_posix()
+    suffix = archive[name].suffix.lower()
+    return {
+        "itemType": "attachment",
+        "linkMode": "linked_file",
+        "parentItem": parent_key,
+        "title": suffix.lstrip(".").upper(),
+        "path": "attachments:" + relative,
+        "contentType": CONTENT_TYPES.get(suffix, ""),
+    }
 
 
 # --- Hämta läget i Zotero -------------------------------------------------
 
+collections = [c["data"] for c in fetch("collections")]
+matches = [c for c in collections if c["name"] == COLLECTION_NAME]
+if len(matches) != 1:
+    raise SystemExit(
+        f"Hittar inte exakt en samling som heter {COLLECTION_NAME}. "
+        "Skapa den i Zotero först – skriptet skapar den inte självt."
+    )
+COLLECTION = matches[0]["key"]
+
 items = [i["data"] for i in fetch("items")]
 attachments = [d for d in items if d.get("itemType") == "attachment"]
 known = attachment_names(attachments)
+tops = [d for d in items
+        if d.get("itemType") not in ("attachment", "note", "annotation")]
 
-# Toppnivåposter: allt som inte är bilaga, anteckning eller annotering.
-tops = [
-    d
-    for d in items
-    if d.get("itemType") not in ("attachment", "note", "annotation")
-]
-
-# Två uppslagsregister. defaultdict(list) ger en tom lista för okända nycklar,
-# så att vi slipper kontrollera om nyckeln finns innan vi lägger till.
 by_isbn = defaultdict(list)
 by_title = defaultdict(list)
 for d in tops:
@@ -91,13 +228,10 @@ for d in tops:
 
 def match(analysis):
     """Letar befintlig post. Returnerar (lista av träffar, hur de hittades)."""
-    # Steg 2: ISBN. Starkast signal – ett ISBN identifierar en utgåva.
     for isbn in norm_isbn(analysis.get("isbn")):
         if by_isbn[isbn]:
             return by_isbn[isbn], f"ISBN {isbn}"
 
-    # Steg 3: titel plus efternamn. Året används inte: samma verk har olika
-    # år i olika utgåvor, och det gav tio felaktiga missar i mätningen.
     hits = by_title[norm(analysis.get("title"))]
     if hits:
         want = surname(analysis.get("author"))
@@ -114,12 +248,8 @@ rules = read_ignore()
 archive = archive_files(rules)
 candidates = citable_entries(rules)
 
-# Steg 1 i matchningen: filnamnet. Kandidater vars fil redan har en bilaga
-# i Zotero sorteras bort direkt och kommer aldrig in i kön.
 queue = sorted(n for n in candidates if n in archive and n not in known)
 
-# Vilka kandidater pekar på samma befintliga post? Måste räknas ut över hela
-# kön, inte bara den visade satsen, annars beror svaret på --antal.
 claims = defaultdict(list)
 for name in queue:
     hits, _ = match(candidates[name])
@@ -131,6 +261,8 @@ def classify(name):
     """Utfallet för en kandidat: (etikett, förklaring, träffad post)."""
     hits, how = match(candidates[name])
     if not hits:
+        if candidates[name].get("type") not in TYPE_MAP:
+            return "OKÄND TYP", candidates[name].get("type"), None
         return "NY POST", how, None
     if len(hits) > 1:
         return "TVETYDIGT", f"{how} matchar {len(hits)} poster", None
@@ -143,6 +275,7 @@ def classify(name):
 
 # --- Utdata ---------------------------------------------------------------
 
+print(f"Samling: {COLLECTION_NAME} ({COLLECTION})")
 print(f"Kandidater totalt: {len(queue)}")
 print(f"Visar: {min(args.antal, len(queue))}\n")
 
@@ -152,19 +285,43 @@ for number, name in enumerate(islice(queue, args.antal), start=1):
 
     print(f"{number}. {name}")
     print(f"   {label:10} {how}")
+
+    if label == "TVETYDIGT":
+        print(f"   hoppas över, ingen ändring")
+        print()
+        continue
+
     if label == "NY POST":
-        print(f"   skapas som: {analysis.get('type')} / {analysis.get('year')}")
-        print(f"   titel:      {analysis.get('title')}")
-        print(f"   författare: {analysis.get('author')}")
+        parent = build_parent(name, analysis, COLLECTION)
+        attachment = build_attachment(name, "<föräldern>")
+        if args.json:
+            print(json.dumps(parent, indent=2, ensure_ascii=False))
+            print(json.dumps(attachment, indent=2, ensure_ascii=False))
+        else:
+            print(f"   skapas som: {parent['itemType']}")
+            print(f"   titel:      {parent['title']}")
+            print(f"   författare: {[c.get('lastName') or c.get('name') for c in parent['creators']]}")
+            # Sammanfattningen är flera hundra tecken och skulle dränka
+            # resten. Hela texten syns med --json.
+            skip = ("itemType", "title", "creators", "collections", "tags")
+            extra = {}
+            for key, value in parent.items():
+                if key in skip:
+                    continue
+                extra[key] = value[:50] + "…" if len(value) > 50 else value
+            print(f"   fält:       {extra}")
     elif item is not None:
+        attachment = build_attachment(name, item["key"])
         print(f"   befintlig:  {item.get('title')}  [{item['key']}]")
-        # Året är ingen matchningsregel men värt att se: skiljer det sig är
-        # det oftast två utgåvor av samma verk, ibland två olika verk.
+        print(f"   åtgärd:     bara bilagan, posten rörs inte")
+        if args.json:
+            print(json.dumps(attachment, indent=2, ensure_ascii=False))
         theirs = re.search(r"\d{4}", str(item.get("date") or ""))
         ours = str(analysis.get("year") or "")
         if theirs and ours and theirs.group(0) != ours:
             print(f"   OBS årtal:  analyzern {ours}, Zotero {theirs.group(0)}")
-    print(f"   plats:      {archive[name].parent.relative_to(ARCHIVE)}")
+
+    print(f"   bilaga:     attachments:{archive[name].relative_to(ARCHIVE).as_posix()}")
     print()
 
 # Summering över hela kön, så att den inte ändras av --antal.
@@ -173,8 +330,15 @@ for name in queue:
     totals[classify(name)[0]] += 1
 
 print("Hela kön:")
-for label in ("NY POST", "TRÄFF", "TVETYDIGT"):
-    print(f"  {label:10} {totals[label]:4}")
+for label in ("NY POST", "TRÄFF", "TVETYDIGT", "OKÄND TYP"):
+    if totals[label]:
+        print(f"  {label:10} {totals[label]:4}")
+
+# Granskningslistan: varje enfältsnamn heuristiken skapat i den visade satsen.
+if single_field_names:
+    print("\nEnfältsnamn att kontrollera (organisation eller feltolkning?):")
+    for person, source in single_field_names:
+        print(f"  {person!r}\n      ur {source}")
 
 remaining = len(queue) - args.antal
 print(f"\nÅterstår efter dessa: {remaining}" if remaining > 0 else "\nDet var alla.")

@@ -75,7 +75,7 @@ Det samtalsbaserade (söka, anteckna, tagga) ska en MCP-server sköta.
 | `arkivlib.py` | klart, steg 5 | Gemensam modul för **arkivet och analyzerns loggar**: `ARCHIVE`, `EXTENSIONS`, `read_ignore`, `is_ignored`, `archive_files`, `citable_entries`. Skild från `zoterolib` eftersom det är två olika ämnen. `python arkivlib.py` räknar igenom arkivet utan att Zotero behöver vara igång |
 | `zotero-write-test.py` | klart, steg 4a | Skapar en testpost med `linked_file` i `zotero-tools-test`. Vägrar om samlingen inte är tom. Samlingen är omdöpt till `Automated-imports`, så skriptet behöver nytt namn i koden för att köras igen |
 | `zotero-patch-test.py` | klart, steg 4b | Växlar testbilagans `path` mellan två filer med `PATCH`. Mönstret för `zotero-repair.py` |
-| `zotero-import.py` | under arbete, del 2 av flera | JSON → Zotero via lokala API:et. Del 1: läser och filtrerar kandidater, `--antal`. Del 2: matchar mot befintliga poster och visar utfallet (NY POST / TRÄFF / TVETYDIGT). Skriver ännu ingenting |
+| `zotero-import.py` | under arbete, del 3 av flera | JSON → Zotero via lokala API:et. Del 1: kandidater, `--antal`. Del 2: matchning, utfallet NY POST / TRÄFF / TVETYDIGT. Del 3: bygger JSON-posterna, `--json` visar dem i sin helhet. Skriver ännu ingenting |
 | `zotero-repair.py` | planerad | Hittar trasiga `linked_file`-sökvägar, letar filnamnet i arkivet, uppdaterar `path` (kan eventuellt slås ihop med import) |
 | `zotero-backup.py` | planerad, sidospår | Konsekvent ögonblicksbild av databasfilerna med `sqlite3.Connection.backup()` → zip i Dropbox. Se backupregeln under Arbetssätt |
 | `notes.txt` | – | Lars egna anteckningar |
@@ -211,10 +211,21 @@ och ska inte förväxlas med fel.
   skapar dubbletter. Känd konsekvens: poster vars enda bilaga är en lagrad
   kopia får ingen arkivlänk.
 - Typmappning: bok→`book`, artikel→`journalArticle`, uppsats→`thesis`,
-  studie→`report`. Fält: summary→`abstractNote`, publication→
-  `publicationTitle`, publisher_place→`place`, isbn→`ISBN`, edition→
-  `edition`, institution→`university`, thesis_type→`thesisType`,
-  year/date_full→`date`.
+  studie→`report`. Gemensamma fält: summary→`abstractNote`, isbn→`ISBN`,
+  publisher_place→`place`. Typberoende fält (2026-09-20):
+  `book` publisher, edition, pages_total→`numPages`;
+  `journalArticle` publication→`publicationTitle`, pages_total→`pages`;
+  `thesis` institution→`university`, thesis_type→`thesisType`,
+  institution_place→`place`, pages_total→`numPages`;
+  `report` institution→`institution`, institution_place→`place`,
+  pages_total→`pages`. Sidantalet heter `numPages` när verket har egna sidor
+  och `pages` när det är sidor i något större.
+- **Datum: `date_full` om det finns, annars `year`, annars inget fält alls.**
+  Täckningen är 18 % respektive 85 %, och `edition` finns bara på 14 %.
+  Frånvaron är förväntad och inget fel – saknade fält utelämnas tyst.
+- **Varje fält kontrolleras mot `SCHEMA[itemType]` innan det sätts** och
+  tappas om det inte hör hemma där. Ett ISBN på en `journalArticle` har
+  ingenstans att ta vägen; `edition` finns bara på `book`.
 - Författare: `author` är en sträng "Efternamn, Förnamn; Efternamn, Förnamn".
   Institutionella författare ("Assemblies of God, General Presbytery") ska bli
   enfältsnamn (`{"creatorType":"author","name":…}`), inte splittas. Lösning:
@@ -276,6 +287,19 @@ och ska inte förväxlas med fel.
   med `{"path": "attachments:…"}` och `If-Unmodified-Since-Version` ändrar
   sökvägen på en befintlig `linked_file`. Versionen ökade 109→110, svaret är
   tomt (204), och den nya filen öppnas i Zotero. Bilagans titel ändras inte.
+- **`GET /api/itemTypeFields?itemType=book`** ger fälten en itemType tillåter,
+  och `itemTypes` respektive `itemTypeCreatorTypes` finns också. De ligger
+  under `/api/`, inte under `/api/users/0/`, så `zoterolib.fetch()` passar
+  inte. Verifierat 2026-09-20. Använd dem hellre än en egen fältlista i
+  koden: schemat kan ändras mellan Zotero-versioner, och ett ogiltigt fält
+  märks annars först vid skrivningen.
+- **Men de är långsamma: omkring 20 sekunder per anrop.** Fyra typer blev
+  87 sekunder, vilket dominerade hela körtiden. `zoterolib.item_type_fields()`
+  cachar därför svaren i `~/.config/zotero-tools/itemtype-fields.json`.
+  Radera filen efter en Zotero-uppdatering. Till jämförelse: `GET items`
+  med 1 541 poster tar 26 sekunder, `collections` 2.
+- `POST /api/items/new?itemType=…` (malltomma poster) finns **inte** lokalt,
+  svarar 404. Det är webb-API:ets ändpunkt.
 - Zotero-teamet: utvecklarguiderna är inte alltid uppdaterade; källkoden
   gäller (adomasven, forum 2025-12-11). Dokumentation:
   - https://www.zotero.org/support/dev/web_api/v3/local_api

@@ -27,6 +27,11 @@ API = ROOT + "users/0/"
 # Path.home() är C:\Users\gunther på Lars dator.
 KEY_FILE = Path.home() / ".config" / "zotero-tools" / "api-key"
 
+# Zoteros fältschema. Ändras bara när Zotero uppdateras, men anropet tar
+# omkring 20 sekunder per itemType, så svaret sparas bredvid nyckeln.
+# Radera filen för att hämta schemat på nytt efter en Zotero-uppdatering.
+SCHEMA_FILE = KEY_FILE.parent / "itemtype-fields.json"
+
 
 def fetch(path):
     """Hämtar path (relativ mot API) och returnerar svaret som Python-data."""
@@ -53,6 +58,28 @@ def attachment_names(attachments=None):
         elif d.get("linkMode") == "imported_file":
             names.add((d.get("filename") or "").lower())
     return names
+
+
+def item_type_fields(item_type):
+    """Fälten Zotero tillåter för en itemType, t.ex. {"title", "ISBN", …}.
+
+    Att fråga Zotero är bättre än en egen lista i koden: schemat kan ändras
+    mellan versioner, och ett ogiltigt fält märks annars först vid
+    skrivningen. Men anropet är långsamt, så svaren sparas i SCHEMA_FILE.
+
+    Ligger under /api/, inte under /api/users/0/, så fetch() passar inte.
+    """
+    cache = {}
+    if SCHEMA_FILE.exists():
+        cache = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+    if item_type not in cache:
+        url = ROOT + f"itemTypeFields?itemType={item_type}"
+        request = urllib.request.Request(url, headers={"Zotero-API-Version": "3"})
+        with urllib.request.urlopen(request) as response:
+            cache[item_type] = [f["field"] for f in json.load(response)]
+        SCHEMA_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SCHEMA_FILE.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+    return set(cache[item_type])
 
 
 def server_id():
