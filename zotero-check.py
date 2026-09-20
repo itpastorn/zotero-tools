@@ -10,13 +10,11 @@ Kör:  python zotero-check.py
 import fnmatch
 import json
 import os
-import urllib.request
 from collections import Counter
 from pathlib import Path
 
-# Användar-ID 0 betyder "den inloggade användaren" i det lokala API:et.
-URL = "http://localhost:23119/api/users/0/items?itemType=attachment"
-ARCHIVE = Path(r"C:\Users\gunther\Dropbox\arkiv\larsArkiv\predikningar-studier")
+# Egen modul i samma mapp. Python letar först i skriptets egen mapp.
+from zoterolib import ARCHIVE, fetch
 
 # Dokumentformat som över huvud taget kan vara aktuella. Vilka av dem som
 # faktiskt tas med styrs av zotero-import-ignore, inte av den här listan.
@@ -27,13 +25,6 @@ IGNORE_FILE = Path(__file__).parent / "zotero-import-ignore"
 
 # Analyzerns egen regel: is_citable sant, men dessa typer räknas ändå inte.
 SKIP_TYPES = {"predikan", "övrigt"}
-
-
-def fetch(url):
-    """Hämtar en URL och returnerar svaret som Python-data (lista av dict)."""
-    request = urllib.request.Request(url, headers={"Zotero-API-Version": "3"})
-    with urllib.request.urlopen(request) as response:
-        return json.load(response)
 
 
 def read_ignore(path):
@@ -104,7 +95,7 @@ def archive_files(rules):
 
 # --- Del 1: översikt ------------------------------------------------------
 
-attachments = [a["data"] for a in fetch(URL)]
+attachments = [a["data"] for a in fetch("items?itemType=attachment")]
 print(f"Antal bilagor: {len(attachments)}\n")
 
 modes = Counter(d.get("linkMode") for d in attachments)

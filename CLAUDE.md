@@ -28,8 +28,9 @@ Det samtalsbaserade (söka, anteckna, tagga) ska en MCP-server sköta.
   ha `--dry-run` som standardläge och kräva en flagga (`--apply`) för att
   skriva. Skriv aldrig till Zotero utan att först visa vad som kommer att
   hända.
-- Backup av Zoteros datakatalog är tagen 2026-09-18. Ta ny backup före första
-  skrivande körning. Zotero-synk är ingen backup: raderingar synkas också.
+- Backup av Zoteros datakatalog är tagen 2026-09-19, före första
+  skrivande körning. Ta ny backup före första skarpa importen. Zotero-synk
+  är ingen backup: raderingar synkas också.
 - Enbart standardbiblioteket (`urllib`, `json`, `pathlib`, `argparse`) så
   länge det räcker. Ingen `.venv` behövs då.
 - Svenska i kommentarer, docstrings och utdata. Engelska termer behålls när
@@ -53,7 +54,9 @@ Det samtalsbaserade (söka, anteckna, tagga) ska en MCP-server sköta.
 |-----|--------|-------------|
 | `zotero-check.py` | klart, steg 2 | Läsande diagnos: bilagor per `linkMode`, trasiga länkar, arkivfiler utan Zotero-post, importkandidater |
 | `zotero-import-ignore` | klart | Vad som aldrig tas med, i diagnos eller import. `.gitignore`-liknande regler, sista träffande regeln avgör |
-| `zoterolib.py` | planerad, steg 3 | Gemensam modul: `fetch`, auth-headers, nyckelhantering. Importeras av de tre skripten så att API-detaljerna finns på ett ställe |
+| `zoterolib.py` | klart, steg 3–4 | Gemensam modul: `fetch` (läsning), `send` (skrivning med nyckel, Server-ID och version), `server_id`, `authorize`, `api_key`. Importeras av de tre skripten så att API-detaljerna finns på ett ställe |
+| `zotero-write-test.py` | klart, steg 4a | Skapar en testpost med `linked_file` i `zotero-tools-test`. Vägrar om samlingen inte är tom. Samlingen är omdöpt till `Automated-imports`, så skriptet behöver nytt namn i koden för att köras igen |
+| `zotero-patch-test.py` | klart, steg 4b | Växlar testbilagans `path` mellan två filer med `PATCH`. Mönstret för `zotero-repair.py` |
 | `zotero-import.py` | planerad | JSON → Zotero via lokala API:et, med matchning mot befintliga poster |
 | `zotero-repair.py` | planerad | Hittar trasiga `linked_file`-sökvägar, letar filnamnet i arkivet, uppdaterar `path` (kan eventuellt slås ihop med import) |
 | `notes.txt` | – | Lars egna anteckningar |
@@ -154,7 +157,10 @@ och ska inte förväxlas med fel.
 - **Samlingar: alla importerade poster hamnar i en enda importsamling**, inte
   i en speglad mapphierarki. Skäl: lätt att överblicka och lätt att ångra
   (markera allt, radera). Lars flyttar ut dem själv efter granskning.
-  Samlingens namn, och om skriptet eller Lars skapar den, är inte bestämt.
+  Beslut 2026-09-20: samlingen heter **`Automated-imports`** (nyckel
+  `L6YLCBVC`) och är skapad av Lars i gränssnittet – skriptet skapar den inte,
+  utan slår upp nyckeln på namnet och avbryter om den saknas. Det är den
+  tidigare testsamlingen `zotero-tools-test`, omdöpt och tömd.
 - **Befintliga lagrade bilagor rörs inte** (115 `imported_file`, 290
   `imported_url`). De läses bara i matchningssteget, så att importen inte
   skapar dubbletter. Känd konsekvens: poster vars enda bilaga är en lagrad
@@ -192,8 +198,12 @@ och ska inte förväxlas med fel.
      dialog Allow / Always Allow / Deny. Svar `{"key": "<32 tecken>",
      "remember": true|false}`. Utan "Always Allow" är nyckeln engångs.
      Max 5 dialoger per minut. Nyckeln skickas som header `Zotero-API-Key`.
-     Spara den i `.env` eller `~/.config/zotero-tools/` (ej i Git).
-  2. Header `Zotero-Server-ID` (läs den från valfritt svar, t.ex. `GET /api/`).
+     Beslut 2026-09-19: nyckeln sparas i
+     `~/.config/zotero-tools/api-key` (utanför Dropbox och Git), se
+     `zoterolib.api_key()`.
+  2. Header `Zotero-Server-ID` (läs den från valfritt svar, t.ex. `GET /api/`;
+     verifierat 2026-09-19: finns som svarshuvud på alla anrop, även
+     `GET /api/` vars svar bara är "Nothing to see here.").
      Saknas den: `428`. Fel ID: `412` = annan databas, kasta cache.
   3. Versionskrav: `PUT`/`PATCH` kräver postens aktuella `version` (i JSON
      eller `If-Unmodified-Since-Version`), annars `412`. Lokala versioner har
@@ -207,12 +217,16 @@ och ska inte förväxlas med fel.
   zotero.org vid nästa synk.
 - Filuppladdning stöds bara för lagrade bilagor (`imported_file`,
   `imported_url`).
-- **Otestat, måste verifieras på en testpost i en testsamling innan
-  import-/reparationsskripten byggs klart:**
-  - Kan `POST …/items` skapa en bilaga med `linkMode: linked_file` och `path`?
-  - Kan `PATCH …/items/<key>` ändra `path` på en befintlig `linked_file`?
-  - Hur ser `path` ut i svaret när Base Directory är satt
-    (`attachments:relativ/sokvag.pdf`, snedstreck framåt)?
+- **Verifierat 2026-09-19 (`zotero-write-test.py`, samling
+  `zotero-tools-test`):** `POST …/items` skapar en förälder och därefter en
+  `linked_file`-bilaga med `parentItem` och
+  `path: "attachments:relativ/sokvag.pdf"`. Zotero sparar sökvägen oförändrad
+  (relativ, snedstreck framåt). Svaret på POST har `successful["0"]["key"]`.
+  Skrivningen gjordes i två anrop: föräldern först, sedan bilagan.
+- **Verifierat 2026-09-19 (`zotero-patch-test.py`):** `PATCH …/items/<key>`
+  med `{"path": "attachments:…"}` och `If-Unmodified-Since-Version` ändrar
+  sökvägen på en befintlig `linked_file`. Versionen ökade 109→110, svaret är
+  tomt (204), och den nya filen öppnas i Zotero. Bilagans titel ändras inte.
 - Zotero-teamet: utvecklarguiderna är inte alltid uppdaterade; källkoden
   gäller (adomasven, forum 2025-12-11). Dokumentation:
   - https://www.zotero.org/support/dev/web_api/v3/local_api
@@ -264,16 +278,15 @@ Använd **aldrig** understreck i filnamn. Undantag: `CLAUDE.md`, `README.md`.
 
 ## Nästa steg
 
-Steg 1 och 2 är klara: diagnosen kör, Base Directory är satt, alla länkar är
-relativa och hela.
+Steg 1–4 är klara: diagnosen kör, Base Directory är satt, alla länkar är
+relativa och hela. `zoterolib.py` finns, `zotero-check.py` använder den, och
+`POST /api/local/authorize` är verifierat 2026-09-19: "Always Allow" gav
+`remember: true` och en nyckel på 32 tecken, sparad i
+`~/.config/zotero-tools/api-key`. Steg 4 (2026-09-19, backup
+tagen före): nyckeln fungerar för skrivning, `POST` skapar `linked_file` och
+`PATCH` ändrar `path`.
 
-1. Steg 3: `zoterolib.py` – modulbegreppet gås igenom, `fetch` flyttas dit
-   från `zotero-check.py`, sedan Server-ID, `POST /api/local/authorize` och
-   nyckelhantering (nyckeln utanför Git).
-2. Steg 4: testa på en testpost i en testsamling att `POST …/items` kan skapa
-   en `linked_file` och att `PATCH` kan ändra dess `path`. Ta ny backup av
-   Zoteros datakatalog först.
-3. Steg 5: `zotero-import.py` med `--dry-run`, en mapp i taget, upp till de
+1. Steg 5: `zotero-import.py` med `--dry-run`, en mapp i taget, upp till de
    542 kandidaterna (fler när de blockerade mapparna släpps).
 
 Sidospår när tillfälle ges: gå igenom de temporärt blockerade mapparna i
