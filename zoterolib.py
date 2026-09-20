@@ -20,7 +20,8 @@ ROOT = "http://localhost:23119/api/"
 # Användar-ID 0 betyder "den inloggade användaren" i det lokala API:et.
 API = ROOT + "users/0/"
 
-ARCHIVE = Path(r"C:\Users\gunther\Dropbox\arkiv\larsArkiv\predikningar-studier")
+# ARCHIVE bodde här tidigare men hör hemma i arkivlib.py. En konstant ska
+# vara definierad på ett enda ställe, annars hinner kopiorna gå isär.
 
 # Nyckeln för skrivning. Ligger i hemkatalogen, utanför Dropbox och Git.
 # Path.home() är C:\Users\gunther på Lars dator.
@@ -32,6 +33,26 @@ def fetch(path):
     request = urllib.request.Request(API + path, headers={"Zotero-API-Version": "3"})
     with urllib.request.urlopen(request) as response:
         return json.load(response)
+
+
+def attachment_names(attachments=None):
+    """Filnamnen på alla bilagor som pekar på en fil, i gemener.
+
+    Både länkade (linked_file, path) och lagrade (imported_file, filename).
+    Används för att se om en arkivfil redan har en post i Zotero.
+
+    Har anroparen redan hämtat bilagorna skickas de in, så att API:et inte
+    behöver frågas två gånger.
+    """
+    if attachments is None:
+        attachments = [a["data"] for a in fetch("items?itemType=attachment")]
+    names = set()
+    for d in attachments:
+        if d.get("linkMode") == "linked_file":
+            names.add(Path(d.get("path") or "").name.lower())
+        elif d.get("linkMode") == "imported_file":
+            names.add((d.get("filename") or "").lower())
+    return names
 
 
 def server_id():

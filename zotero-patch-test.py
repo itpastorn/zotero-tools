@@ -12,7 +12,8 @@ Kör:  python zotero-patch-test.py
 
 import argparse
 
-from zoterolib import ARCHIVE, fetch, send
+from zoterolib import fetch, send
+from arkivlib import ARCHIVE
 
 COLLECTION_NAME = "zotero-tools-test"
 

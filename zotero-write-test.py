@@ -14,7 +14,8 @@ Kör:  python zotero-write-test.py
 import argparse
 import json
 
-from zoterolib import ARCHIVE, fetch, send
+from zoterolib import fetch, send
+from arkivlib import ARCHIVE
 
 COLLECTION_NAME = "zotero-tools-test"
 

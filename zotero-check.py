@@ -7,90 +7,20 @@ communicate with Zotero".
 Kör:  python zotero-check.py
 """
 
-import fnmatch
-import json
-import os
 from collections import Counter
 from pathlib import Path
 
-# Egen modul i samma mapp. Python letar först i skriptets egen mapp.
-from zoterolib import ARCHIVE, fetch
-
-# Dokumentformat som över huvud taget kan vara aktuella. Vilka av dem som
-# faktiskt tas med styrs av zotero-import-ignore, inte av den här listan.
-EXTENSIONS = {".pdf", ".epub", ".doc", ".docx", ".md"}
-
-# Ignorefilen ligger bredvid skriptet. __file__ är sökvägen till denna fil.
-IGNORE_FILE = Path(__file__).parent / "zotero-import-ignore"
-
-# Analyzerns egen regel: is_citable sant, men dessa typer räknas ändå inte.
-SKIP_TYPES = {"predikan", "övrigt"}
-
-
-def read_ignore(path):
-    """Läser zotero-import-ignore och returnerar reglerna som en lista.
-
-    Varje regel blir en tupel (mönster, bara_mappar, är_undantag).
-    """
-    rules = []
-    if not path.exists():
-        print(f"Varning: {path.name} saknas, inget filtreras bort.")
-        return rules
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        negated = line.startswith("!")
-        if negated:
-            line = line[1:]
-        dir_only = line.endswith("/")
-        rules.append((line.strip("/"), dir_only, negated))
-    return rules
-
-
-def is_ignored(relative, is_dir, rules):
-    """Sant om sökvägen (relativ mot arkivroten) ska ignoreras.
-
-    Mönster utan snedstreck jämförs mot varje led i sökvägen, så att
-    "analyzer/" träffar var som helst i trädet. Mönster med snedstreck
-    jämförs mot hela sökvägen från arkivroten.
-
-    Allt jämförs i gemener. Windows filsystem är skiftlägesokänsligt, och
-    arkivet innehåller både "rapport.doc" och "RAPPORT.DOC". fnmatchcase
-    sköter jokertecknen ("*.doc"); den egna gemeneringen gör jämförelsen
-    skiftlägesokänslig utan att bero på vilket operativsystem som kör.
-    """
-    text = relative.as_posix().lower()
-    ignored = False
-    for pattern, dir_only, negated in rules:
-        pattern = pattern.lower()
-        if dir_only and not is_dir:
-            continue
-        if "/" in pattern:
-            # Mappmönster täcker även allt som ligger under mappen.
-            hit = fnmatch.fnmatchcase(text, pattern) or text.startswith(pattern + "/")
-        else:
-            hit = any(fnmatch.fnmatchcase(p.lower(), pattern) for p in relative.parts)
-        # Sista träffande regeln avgör, precis som i .gitignore.
-        if hit:
-            ignored = not negated
-    return ignored
-
-
-def archive_files(rules):
-    """Alla dokumentfiler i arkivet som zotero-import-ignore släpper igenom."""
-    found = {}
-    for root, dirs, files in os.walk(ARCHIVE):
-        base = Path(root).relative_to(ARCHIVE)
-        # Beskär listan på plats så att os.walk inte går ner i uteslutna mappar.
-        dirs[:] = [d for d in dirs if not is_ignored(base / d, True, rules)]
-        for name in files:
-            if Path(name).suffix.lower() not in EXTENSIONS:
-                continue
-            if is_ignored(base / name, False, rules):
-                continue
-            found[name.lower()] = Path(root) / name
-    return found
+# Egna moduler i samma mapp. Python letar först i skriptets egen mapp.
+# zoterolib = Zoteros API, arkivlib = arkivet och analyzerns loggar.
+from zoterolib import attachment_names, fetch
+from arkivlib import (
+    ARCHIVE,
+    IGNORE_FILE,
+    archive_files,
+    citable_entries,
+    is_ignored,
+    read_ignore,
+)
 
 
 # --- Del 1: översikt ------------------------------------------------------
@@ -104,7 +34,6 @@ for mode, count in modes.most_common():
     print(f"  {mode:15} {count}")
 
 linked = [d for d in attachments if d.get("linkMode") == "linked_file"]
-stored = [d for d in attachments if d.get("linkMode") == "imported_file"]
 relative = [d for d in linked if (d.get("path") or "").startswith("attachments:")]
 print(f"\nLänkade filer: {len(linked)}, varav relativa (attachments:): {len(relative)}")
 
@@ -123,11 +52,7 @@ for d in broken:
 
 # --- Del 3: arkivfiler som Zotero inte känner till -------------------------
 
-known = set()
-for d in linked:
-    known.add(Path(d.get("path") or "").name.lower())
-for d in stored:
-    known.add((d.get("filename") or "").lower())
+known = attachment_names(attachments)
 
 rules = read_ignore(IGNORE_FILE)
 archive = archive_files(rules)
@@ -142,34 +67,6 @@ for name in missing[:5]:
     print("  ", archive[name].relative_to(ARCHIVE))
 
 # --- Del 4: importkandidater ur analyzerns loggar --------------------------
-
-
-def citable_entries(rules):
-    """Citerbara poster ur alla processed_files.json, nyckel = filnamn i gemener.
-
-    Poster som bara har "primary" är sekundära filer i en grupp (t.ex. en EPUB
-    vid sidan av en PDF) och hoppas över. Att nyckeln är filnamnet gör att de
-    fyra dubblettloggarna som bara skiljer i skiftläge slås ihop av sig själva.
-    """
-    entries = {}
-    for json_path in ARCHIVE.rglob("processed_files.json"):
-        # Mappen analyzern kördes på, alltså analyzer-mappens förälder.
-        folder = json_path.parent.parent.relative_to(ARCHIVE)
-        if is_ignored(folder, True, rules):
-            continue
-        log = json.loads(json_path.read_text(encoding="utf-8"))
-        for logged_path, record in log.items():
-            analysis = record.get("analysis")
-            if not analysis or not analysis.get("is_citable"):
-                continue
-            if analysis.get("type") in SKIP_TYPES:
-                continue
-            # filepath pekar på PDF:en när en sådan finns i gruppen.
-            name = Path(analysis.get("filepath") or logged_path).name.lower()
-            if Path(name).suffix in {".ppt", ".pptx"}:
-                continue
-            entries[name] = analysis
-    return entries
 
 
 candidates = citable_entries(rules)

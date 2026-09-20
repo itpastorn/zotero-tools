@@ -71,10 +71,11 @@ Det samtalsbaserade (söka, anteckna, tagga) ska en MCP-server sköta.
 |-----|--------|-------------|
 | `zotero-check.py` | klart, steg 2 | Läsande diagnos: bilagor per `linkMode`, trasiga länkar, arkivfiler utan Zotero-post, importkandidater |
 | `zotero-import-ignore` | klart | Vad som aldrig tas med, i diagnos eller import. `.gitignore`-liknande regler, sista träffande regeln avgör |
-| `zoterolib.py` | klart, steg 3–4 | Gemensam modul: `fetch` (läsning), `send` (skrivning med nyckel, Server-ID och version), `server_id`, `authorize`, `api_key`. Importeras av de tre skripten så att API-detaljerna finns på ett ställe |
+| `zoterolib.py` | klart, steg 3–4 | Gemensam modul för **Zoteros API**: `fetch` (läsning), `send` (skrivning med nyckel, Server-ID och version), `attachment_names`, `server_id`, `authorize`, `api_key` |
+| `arkivlib.py` | klart, steg 5 | Gemensam modul för **arkivet och analyzerns loggar**: `ARCHIVE`, `EXTENSIONS`, `read_ignore`, `is_ignored`, `archive_files`, `citable_entries`. Skild från `zoterolib` eftersom det är två olika ämnen. `python arkivlib.py` räknar igenom arkivet utan att Zotero behöver vara igång |
 | `zotero-write-test.py` | klart, steg 4a | Skapar en testpost med `linked_file` i `zotero-tools-test`. Vägrar om samlingen inte är tom. Samlingen är omdöpt till `Automated-imports`, så skriptet behöver nytt namn i koden för att köras igen |
 | `zotero-patch-test.py` | klart, steg 4b | Växlar testbilagans `path` mellan två filer med `PATCH`. Mönstret för `zotero-repair.py` |
-| `zotero-import.py` | planerad | JSON → Zotero via lokala API:et, med matchning mot befintliga poster |
+| `zotero-import.py` | under arbete, del 2 av flera | JSON → Zotero via lokala API:et. Del 1: läser och filtrerar kandidater, `--antal`. Del 2: matchar mot befintliga poster och visar utfallet (NY POST / TRÄFF / TVETYDIGT). Skriver ännu ingenting |
 | `zotero-repair.py` | planerad | Hittar trasiga `linked_file`-sökvägar, letar filnamnet i arkivet, uppdaterar `path` (kan eventuellt slås ihop med import) |
 | `zotero-backup.py` | planerad, sidospår | Konsekvent ögonblicksbild av databasfilerna med `sqlite3.Connection.backup()` → zip i Dropbox. Se backupregeln under Arbetssätt |
 | `notes.txt` | – | Lars egna anteckningar |
@@ -171,7 +172,33 @@ och ska inte förväxlas med fel.
   citerbarhetsregel, exklusive allt som `zotero-import-ignore` stoppar.
 - **Matchning mot befintliga Zotero-poster i tre steg** innan något skapas:
   (1) bilagans filnamn (`linked_file.path` eller `imported_file.filename`,
-  gemener), (2) ISBN, (3) titel + år. Träff = uppdatera/länka, inte skapa.
+  gemener), (2) ISBN, (3) **titel + första författarens efternamn**.
+  Träff = bifoga filen till den befintliga posten, inte skapa en ny.
+  Mätning 2026-09-20 på de 542 kandidaterna: 77 träffar, 6 tvetydiga,
+  459 nya. Utan steg 2–3 hade 83 dubbletter skapats (15 %).
+- **Steg 3 använder inte årtal**, trots att en tidigare version av den här
+  filen sa "titel + år". Skälet är mätt: av 74 titelträffar hade 10 olika år,
+  och varje fall var samma verk i en annan utgåva (Fee 1994/2011, Dunn
+  1975/1988, Gee 1972/1980). Ett årskrav hade alltså skapat tio dubbletter av
+  böcker som redan finns. Efternamnet är den bättre andra signalen: det tål
+  utgåveskillnader men stoppar generiska titlar. Året skrivs ändå ut som
+  varning (`OBS årtal`) när det avviker.
+- **Vid träff rörs bara bilagan.** Den befintliga postens metadata är Lars
+  granskade arbete och ska inte skrivas över. Posten taggas inte
+  `okontrollerad` och läggs **inte** i `Automated-imports` – annars vore
+  "markera allt i samlingen och radera" inte längre en säker ångra-knapp,
+  eftersom egna poster då skulle följa med. Träffarna listas i utdata.
+- **Tvetydiga fall hoppas över och rapporteras**, aldrig gissning. Två
+  varianter, båda funna i mätningen: flera kandidatfiler som pekar på samma
+  post (Congar hel bok + vol 1, Dunn hel bok + utdrag, Keener vol 1 + partiell
+  vol 1), och en kandidat vars titel matchar flera poster. Tvetydigheten
+  räknas ut över **hela** kön, inte den visade satsen, annars skulle svaret
+  bero på `--antal`.
+- Kända gränsfall från mätningen, båda korrekt hanterade: en Zotero-post kan
+  bära flera ISBN (Dorriens trebandsverk har alla tre, så vol 3 matchar rätt),
+  och en felstavad författare i Zotero ("Rasmussen" för Rasmusson) ger med
+  flit ingen träff – skriptet rapporterar "titel men fel författare" så att
+  posten i Zotero kan rättas i stället för att dubbleras.
 - **Samlingar: alla importerade poster hamnar i en enda importsamling**, inte
   i en speglad mapphierarki. Skäl: lätt att överblicka och lätt att ångra
   (markera allt, radera). Lars flyttar ut dem själv efter granskning.
